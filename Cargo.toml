@@ -1,0 +1,7 @@
+[package]
+name = "recursive-syntax-parser-practice"
+version = "0.1.0"
+authors = ["Nakayama Daiju"]
+edition = "2018"
+
+[dependencies]
