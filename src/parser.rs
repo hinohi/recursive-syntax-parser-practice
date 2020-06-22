@@ -1,15 +1,7 @@
+use crate::expr::Expr;
 use crate::tokenizer::Token;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
-    Number(f64),
-    Add(Box<Expr>, Box<Expr>),
-    Sub(Box<Expr>, Box<Expr>),
-    Mul(Box<Expr>, Box<Expr>),
-    Div(Box<Expr>, Box<Expr>),
-    Pow(Box<Expr>, Box<Expr>),
-}
-
+/// Parser
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parser {
     stack: Vec<State>,
@@ -80,6 +72,10 @@ pub enum AcceptStatus {
 impl Parser {
     pub fn new() -> Parser {
         Parser { stack: Vec::new() }
+    }
+
+    pub fn build(self) -> Expr {
+        self.stack.into_iter().next().unwrap().into_expr()
     }
 
     pub fn accept_token(&mut self, token: Token) -> Result<AcceptStatus, SyntaxError> {
@@ -175,11 +171,140 @@ impl Parser {
             return;
         }
         let mut head_expr = self.stack.pop().unwrap().into_expr();
-        let mut iter = stack.into_iter();
-        while let Some(op) = iter.next() {
-            let tail_expr = iter.next().unwrap().into_expr();
+        while let Some(op) = stack.pop() {
+            let tail_expr = stack.pop().unwrap().into_expr();
             head_expr = op.make_expr(head_expr, tail_expr);
         }
         self.stack.push(State::Expr(head_expr));
+    }
+}
+
+impl Default for Parser {
+    fn default() -> Parser {
+        Parser::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_number() {
+        let mut p = Parser::new();
+        assert_eq!(p.accept_token(Token::Number(1.0)), Ok(AcceptStatus::Yet));
+        assert_eq!(p.accept_token(Token::EOL), Ok(AcceptStatus::Accept));
+        assert_eq!(p.build(), Expr::Number(1.0));
+    }
+
+    #[test]
+    fn single_add() {
+        let mut p = Parser::new();
+        assert_eq!(p.accept_token(Token::Number(1.0)), Ok(AcceptStatus::Yet));
+        assert_eq!(p.accept_token(Token::Add), Ok(AcceptStatus::Yet));
+        assert_eq!(p.accept_token(Token::Number(2.0)), Ok(AcceptStatus::Yet));
+        assert_eq!(p.accept_token(Token::EOL), Ok(AcceptStatus::Accept));
+        assert_eq!(
+            p.build(),
+            Expr::Add(Box::new(Expr::Number(1.0)), Box::new(Expr::Number(2.0)))
+        );
+    }
+
+    /// `1 + 2 * 3 * 4 - 5 / 6 ** 7 ** 8 * 9 + 10` is
+    /// `((1 + ((2 * 3) * 4)) - ((5 / (6 ** (7 ** 8))) * 9)) + 10`
+    #[test]
+    fn connectivity() {
+        let tokens = vec![
+            Token::Number(1.0),
+            Token::Add,
+            Token::Number(2.0),
+            Token::Mul,
+            Token::Number(3.0),
+            Token::Mul,
+            Token::Number(4.0),
+            Token::Sub,
+            Token::Number(5.0),
+            Token::Div,
+            Token::Number(6.0),
+            Token::Pow,
+            Token::Number(7.0),
+            Token::Pow,
+            Token::Number(8.0),
+            Token::Mul,
+            Token::Number(9.0),
+            Token::Add,
+            Token::Number(10.0),
+        ];
+        let mut p = Parser::new();
+        for t in tokens {
+            assert_eq!(p.accept_token(t), Ok(AcceptStatus::Yet));
+            assert_eq!(p.accept_token(Token::Space), Ok(AcceptStatus::Yet));
+        }
+        assert_eq!(p.accept_token(Token::EOL), Ok(AcceptStatus::Accept));
+        assert_eq!(
+            p.build(),
+            Expr::Add(
+                Box::new(Expr::Sub(
+                    Box::new(Expr::Add(
+                        Box::new(Expr::Number(1.0)),
+                        Box::new(Expr::Mul(
+                            Box::new(Expr::Mul(
+                                Box::new(Expr::Number(2.0)),
+                                Box::new(Expr::Number(3.0)),
+                            )),
+                            Box::new(Expr::Number(4.0)),
+                        ))
+                    )),
+                    Box::new(Expr::Mul(
+                        Box::new(Expr::Div(
+                            Box::new(Expr::Number(5.0)),
+                            Box::new(Expr::Pow(
+                                Box::new(Expr::Number(6.0)),
+                                Box::new(Expr::Pow(
+                                    Box::new(Expr::Number(7.0)),
+                                    Box::new(Expr::Number(8.0)),
+                                )),
+                            )),
+                        )),
+                        Box::new(Expr::Number(9.0)),
+                    )),
+                )),
+                Box::new(Expr::Number(10.0)),
+            )
+        );
+    }
+
+    #[test]
+    fn paren() {
+        let n = 100;
+        let mut p = Parser::new();
+        for _ in 0..n * 2 {
+            assert_eq!(p.accept_token(Token::ParenOpen), Ok(AcceptStatus::Yet));
+            assert_eq!(p.accept_token(Token::Space), Ok(AcceptStatus::Yet));
+        }
+        assert_eq!(p.accept_token(Token::Number(1.0)), Ok(AcceptStatus::Yet));
+        assert_eq!(p.accept_token(Token::Add), Ok(AcceptStatus::Yet));
+        assert_eq!(p.accept_token(Token::Number(0.0)), Ok(AcceptStatus::Yet));
+        for _ in 0..n {
+            assert_eq!(p.accept_token(Token::ParenClose), Ok(AcceptStatus::Yet));
+            assert_eq!(p.accept_token(Token::Space), Ok(AcceptStatus::Yet));
+        }
+        assert_eq!(p.accept_token(Token::Mul), Ok(AcceptStatus::Yet));
+        assert_eq!(p.accept_token(Token::Number(2.0)), Ok(AcceptStatus::Yet));
+        for _ in 0..n {
+            assert_eq!(p.accept_token(Token::ParenClose), Ok(AcceptStatus::Yet));
+            assert_eq!(p.accept_token(Token::Space), Ok(AcceptStatus::Yet));
+        }
+        assert_eq!(p.accept_token(Token::EOL), Ok(AcceptStatus::Accept));
+        assert_eq!(
+            p.build(),
+            Expr::Mul(
+                Box::new(Expr::Add(
+                    Box::new(Expr::Number(1.0)),
+                    Box::new(Expr::Number(0.0)),
+                )),
+                Box::new(Expr::Number(2.0)),
+            )
+        );
     }
 }
